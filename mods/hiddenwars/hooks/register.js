@@ -26,8 +26,8 @@ export function register(on) {
     const base = await $.store.get('hw.base')
     if (typeof base === 'string' && base) baseCache = base
     for (const spec of [
-      { name: 'hw', description: 'HiddenWars uplink — dashboard panel, operator stats & HNDLR notifications', argumentHint: '[panel|status|notif [n]|read|login [pass|cancel]|logout|poll <sec|off>|api <url>]' },
-      { name: 'hiddenwars', description: 'HiddenWars uplink (alias of /hw)', argumentHint: '[panel|status|notif [n]|read|login [pass|cancel]|logout|poll <sec|off>|api <url>]' },
+      { name: 'hw', description: 'HiddenWars uplink — dashboard panel, operator stats & HNDLR notifications', argumentHint: '[panel|close|status|notif [n]|read|login [pass|cancel]|logout|poll <sec|off>|api <url>]' },
+      { name: 'hiddenwars', description: 'HiddenWars uplink (alias of /hw)', argumentHint: '[panel|close|status|notif [n]|read|login [pass|cancel]|logout|poll <sec|off>|api <url>]' },
     ]) {
       try {
         await $.command.register(spec)
@@ -130,6 +130,14 @@ async function handleCommand($, raw) {
   }
   if (sub === 'help') return usage()
   if (sub === 'api') return setApi($, parts[1])
+  // Pane hotkeys (r/m/x) only fire while the pane holds the keyboard — an
+  // auto-launched pane often opens without it (focus is refused while the
+  // composer has text or a turn runs), so the prompt needs its own close.
+  if (sub === 'close') {
+    stopPanelTimer()
+    await $.ui.close({ id: 'hw-panel' })
+    return 'UPLINK panel closed — /hw reopens it. (Esc or ctrl+x x also close it.)'
+  }
 
   if (!tokens) return 'No uplink session. Run /hw login first (or /hw help).'
 
@@ -152,6 +160,8 @@ function usage() {
   return [
     '◤ HNDLR UPLINK — commands',
     '  /hw              open the dashboard panel (resources, heat, botnet, wire)',
+    '  /hw close        close the panel (also: Esc or ctrl+x x — x works only',
+    '                   while the panel has keyboard focus)',
     '  /hw status       operator status as text',
     '  /hw notif [n]    latest n notifications (default 10)',
     '  /hw read         mark all notifications read',

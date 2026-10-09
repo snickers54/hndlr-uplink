@@ -14,8 +14,10 @@ watch the wire for incoming heat lockouts and raids — without opening the game
   card with your resources, vault, heat gauge and botnet rollup, active
   operations (world boss, siege, events), recent transmissions, and the
   latest Wire headlines — with `r` refresh / `m` read-all / `x` close
-  controls. It auto-refreshes on the poll cadence, and **launches by itself
-  the moment a login completes**.
+  controls (hotkeys work while the panel has keyboard focus — click it or
+  Tab into it). Closing it from the prompt: `/hw close`, `Esc`, or
+  `ctrl+x x`. It auto-refreshes on the poll cadence, and **launches by
+  itself the moment a login completes**.
 - **`/hw status`** — the same operator readout as text.
 - **`/hw notif [n]`** — latest transmissions, severity-marked, newest first.
 - **`/hw read`** — clear the unread badge.
