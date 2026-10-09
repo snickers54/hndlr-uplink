@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildPanel, heatRatio, heatBar, heatColor, activeOps, HEAT_MAX } from '../hooks/panel.js'
+import { buildPanel, heatRatio, heatBar, heatColor, activeOps, humanizeMentions, HEAT_MAX } from '../hooks/panel.js'
 
 // Fake element constructors — buildPanel only passes props through, so plain
 // object tags let tests walk the tree like the surface renderer would.
@@ -172,9 +172,27 @@ test('the wire: pinned story in cyan, others plain', () => {
   const pinned = nodes.find((t) => (t.children || [])[0].startsWith('► NEXUS'))
   assert.ok(pinned, 'pinned wire item missing')
   assert.equal(pinned.color, 'cyan')
-  const plain = nodes.find((t) => (t.children || [])[0].startsWith('► DarkNet'))
+  const plain = nodes.find((t) => (t.children || [''])[0].startsWith('► DarkNet'))
   assert.ok(plain)
   assert.notEqual(plain.color, 'cyan')
+})
+
+test('wire mention tokens render as handles, never raw uuids', () => {
+  const uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const data = {
+    ...baseData,
+    wire: { items: [
+      { id: 'w1', headline: `A new operator surfaced. The handle is @[${uuid}].`, occurredAt: new Date().toISOString(), mention_names: { [uuid]: 'S4B3R' } },
+      { id: 'w2', headline: `@[${uuid}] collected a 90,000 crypto bounty.`, occurredAt: new Date().toISOString() },
+    ] },
+  }
+  const lines = allText(data)
+  assert.ok(lines.some((l) => l.includes('@S4B3R')), 'resolved handle missing')
+  assert.ok(lines.some((l) => l.includes('@unknown')), 'unresolved mention must read @unknown')
+  assert.ok(lines.every((l) => !l.includes('@[')), 'raw mention token leaked: ' + lines.join(' | '))
+  assert.equal(humanizeMentions(`@[${uuid}]`, { [uuid]: 'S4B3R' }), '@S4B3R')
+  assert.equal(humanizeMentions(`@[${uuid}]`, undefined), '@unknown')
+  assert.equal(humanizeMentions('no tokens here', {}), 'no tokens here')
 })
 
 test('footer: hotkey buttons r/m/x, freshness left, error replaces it', () => {

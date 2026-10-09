@@ -1,6 +1,6 @@
 {
   "name": "hiddenwars",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "HNDLR uplink — monitor your HiddenWars operator stats and notifications from Claude Code",
   "author": { "name": "Julien Singler", "url": "https://hiddenwars.io" }
 }

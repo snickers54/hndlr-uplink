@@ -212,7 +212,11 @@ export function buildPanel(el, data, width = 44) {
         justifyContent: 'space-between',
         columnGap: 1,
         children: [
-          Text({ wrap: 'truncate-end', color: item.pinned ? 'cyan' : undefined, children: ['► ' + (item.headline || item.body || '')] }),
+          Text({
+            wrap: 'truncate-end',
+            color: item.pinned ? 'cyan' : undefined,
+            children: ['► ' + humanizeMentions(item.headline || item.body || '', item.mention_names)],
+          }),
           Text({ dimColor: true, children: [timeAgo(item.occurredAt)] }),
         ],
       }))
@@ -241,6 +245,18 @@ export function buildPanel(el, data, width = 44) {
   }))
 
   return Box({ flexDirection: 'column', children })
+}
+
+// Everything active right now that an operator should glance at. Shapes are
+// defensive: /player/state may add fields; presence is what matters here.
+// Wire copy embeds "@[uuid]" mention tokens (the game frontend renders them
+// as clickable profiles); mention_names on each wire item resolves them so
+// this plain-text panel shows handles. Unknown ids read @unknown.
+export function humanizeMentions(text, names) {
+  return String(text || '').replace(/@\[([0-9a-fA-F-]{36})\]/g, (token, id) => {
+    const name = names && names[id]
+    return name ? '@' + name : '@unknown'
+  })
 }
 
 // Everything active right now that an operator should glance at. Shapes are
