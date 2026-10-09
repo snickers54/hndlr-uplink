@@ -151,7 +151,7 @@ test('requests carry the uplink identity headers', async () => {
     setTokens: async () => {},
   })
   await c2.get('/player')
-  assert.equal(seenHeaders['User-Agent'], 'hiddenwars-uplink/0.3 (claude-code-mod)')
+  assert.equal(seenHeaders['User-Agent'], 'hiddenwars-uplink/0.4 (claude-code-mod)')
   assert.equal(seenHeaders['X-Client-Source'], 'claude-code-mod')
   assert.equal(seenHeaders.Authorization, undefined)
 })

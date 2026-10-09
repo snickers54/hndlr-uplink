@@ -10,11 +10,12 @@ watch the wire for incoming heat lockouts and raids — without opening the game
 ## What it does
 
 - **`/hw`** — opens the **dashboard panel** (a right sidebar in wide
-  terminals, 144+ columns): resources, a heat bar with lockout threshold,
-  vault protection, botnet rollup, active operations (world boss, siege,
-  events), recent transmissions, and the latest Wire headlines — with
-  `r` refresh / `m` read-all / `x` close controls. It auto-refreshes on the
-  poll cadence.
+  terminals, 144+ columns): a status title bar (`LIVE`/`NO LINK`), a stat
+  card with your resources, vault, heat gauge and botnet rollup, active
+  operations (world boss, siege, events), recent transmissions, and the
+  latest Wire headlines — with `r` refresh / `m` read-all / `x` close
+  controls. It auto-refreshes on the poll cadence, and **launches by itself
+  the moment a login completes**.
 - **`/hw status`** — the same operator readout as text.
 - **`/hw notif [n]`** — latest transmissions, severity-marked, newest first.
 - **`/hw read`** — clear the unread badge.
@@ -40,10 +41,10 @@ Then restart Claude Code (or run `/plugin`) and type `/hw`.
 
 Run `/hw login` — the mod prints a pairing URL and code. Open the link in
 your browser, authorize the terminal from the operator account you're
-already logged into, and the uplink connects itself. No password (and no
-2FA code) is ever typed in the terminal; the browser session vouches for
-you. Pairing codes expire after 10 minutes — `/hw login cancel` aborts
-early.
+already logged into, and the uplink connects itself: the dashboard panel
+opens as soon as the link lands. No password (and no 2FA code) is ever
+typed in the terminal; the browser session vouches for you. Pairing codes
+expire after 10 minutes — `/hw login cancel` aborts early.
 
 The legacy password path is still there for edge cases: `/hw login pass`
 opens the email/password pane (with a 2FA step when enabled), or set
@@ -62,7 +63,7 @@ anywhere, and you'll be reminded to unset it.
 - The uplink is **read-only**: it never acts in the game. The only writes are
   the login endpoints and an explicit `/hw read`. It polls at most once per
   30s (`/hw poll` to change, `/hw poll off` to stop).
-- Requests identify themselves as `hiddenwars-uplink/0.3 (claude-code-mod)`.
+- Requests identify themselves as `hiddenwars-uplink/0.4 (claude-code-mod)`.
 
 ## Development
 

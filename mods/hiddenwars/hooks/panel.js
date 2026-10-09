@@ -5,6 +5,11 @@
 //
 // Data comes from GET /player/state, /player/notifications, /botnet/summary
 // and /wire/latest (see api.js / register.js refreshPanel).
+//
+// Layout uses the Ink-style props the pane surface exposes (borderStyle,
+// padding, flexGrow, justifyContent…): a solid inverse title bar, one round
+// bordered card carrying every number (stat grid, vault, heat gauge, botnet
+// rollup), then chip-headed list sections, then a one-line footer.
 
 import { compact, timeAgo } from './format.js'
 
@@ -12,6 +17,7 @@ import { compact, timeAgo } from './format.js'
 export const HEAT_MAX = 200
 
 const SEV_COLORS = { danger: 'red', warning: 'yellow', success: 'green', info: 'gray' }
+const STAT_COLORS = { crypto: 'cyan', fragments: 'magenta', echoes: 'blue', reputation: 'green' }
 
 export function heatRatio(heat, threshold) {
   const h = Number(heat) || 0
@@ -19,7 +25,7 @@ export function heatRatio(heat, threshold) {
   return Math.max(0, Math.min(1, h / t))
 }
 
-export function heatBar(heat, threshold, cells = 12) {
+export function heatBar(heat, threshold, cells = 14) {
   const filled = Math.round(heatRatio(heat, threshold) * cells)
   return '█'.repeat(filled) + '░'.repeat(cells - filled)
 }
@@ -34,7 +40,7 @@ export function heatColor(heat, threshold) {
 // buildPanel(el, data, width) -> element tree for the hw-panel pane.
 //   el   { Box, Text, Button } as resolved by $.ui.resolve(e)
 //   data { state, notif, botnet, wire, error, updatedAt } — any may be absent
-//   width  the pane's body width in cells (for dividers/truncation)
+//   width  the pane's body width in cells (for the title bar / headers)
 export function buildPanel(el, data, width = 44) {
   const { Box, Text, Button } = el
   const state = data.state || {}
@@ -48,94 +54,147 @@ export function buildPanel(el, data, width = 44) {
 
   const children = []
 
-  // ── header ─────────────────────────────────────────────────────────────
-  children.push(Text({ bold: true, children: ['◤ HNDLR UPLINK'] }))
-  const idLine = [p.username || 'operator']
-  if (p.archetype) idLine.push(p.archetype)
-  if (p.subscription_tier && p.subscription_tier !== 'NONE') idLine.push(p.subscription_tier)
-  children.push(Text({ dimColor: true, children: [idLine.join(' · ')] }))
-  children.push(divider(Text, inner))
+  // ── title bar: inverse strip, status right-aligned ──────────────────────
+  const online = !!(p.username || data.updatedAt)
+  const right = data.error
+    ? 'NO LINK'
+    : online ? 'LIVE ' + clock(data.updatedAt || Date.now()) : 'STANDBY'
+  const title = '◤ HNDLR UPLINK'
+  const gap = Math.max(1, inner - title.length - right.length)
+  children.push(Text({
+    inverse: true,
+    bold: true,
+    color: data.error ? 'red' : undefined,
+    children: [title + ' '.repeat(gap) + right],
+  }))
 
-  if (!p.username && !data.error) {
-    children.push(Text({ dimColor: true, children: ['establishing uplink…'] }))
-    children.push(divider(Text, inner))
+  // ── identity ────────────────────────────────────────────────────────────
+  if (p.username) {
+    const tier = String(p.subscription_tier || '').toUpperCase()
+    const meta = [p.archetype, tier && tier !== 'NONE' && tier !== 'FREE' ? tier : '']
+      .filter(Boolean).join(' · ')
+    children.push(Box({
+      flexDirection: 'row',
+      columnGap: 1,
+      children: [
+        Text({ bold: true, children: [p.username] }),
+        meta ? Text({ dimColor: true, children: [meta] }) : null,
+      ].filter(Boolean),
+    }))
   }
 
-  // ── resources ──────────────────────────────────────────────────────────
+  // ── the numbers card ────────────────────────────────────────────────────
   if (p.username) {
-    children.push(sectionTitle(Text, 'RESOURCES'))
-    children.push(row(el, 'crypto', compact(p.crypto) + (p.dirty_crypto ? '  +' + compact(p.dirty_crypto) + ' dirty' : '')))
-    children.push(row(el, 'fragments', compact(p.fragments)))
-    if (p.echoes) children.push(row(el, 'echoes', compact(p.echoes)))
-    children.push(row(el, 'reputation', compact(p.reputation)))
+    const card = []
+
+    const stats = [
+      ['crypto', compact(p.crypto) + (p.dirty_crypto ? ' +' + compact(p.dirty_crypto) : '')],
+      ['fragments', compact(p.fragments)],
+    ]
+    if (p.echoes) stats.push(['echoes', compact(p.echoes)])
+    stats.push(['reputation', compact(p.reputation)])
+    for (let i = 0; i < stats.length; i += 2) {
+      card.push(Box({
+        flexDirection: 'row',
+        columnGap: 1,
+        marginTop: 1,
+        children: stats.slice(i, i + 2).map(([label, value]) => statCell(el, label, value)),
+      }))
+    }
 
     if (Number(vault.cap) > 0) {
       const bits = ['protected ' + compact(vault.protected) + '/' + compact(vault.cap)]
       if (Number(vault.exposed) > 0) bits.push(compact(vault.exposed) + ' exposed')
       if (vault.mining_halted) bits.push('MINING HALTED')
-      children.push(row(el, 'vault', bits.join(' · '), { color: vault.mining_halted || Number(vault.exposed) > 0 ? 'yellow' : undefined }))
+      const warn = vault.mining_halted || Number(vault.exposed) > 0
+      card.push(Box({
+        flexDirection: 'row',
+        columnGap: 1,
+        marginTop: 1,
+        children: [
+          Text({ dimColor: true, children: ['VAULT'] }),
+          Text({ color: warn ? 'yellow' : undefined, children: [bits.join(' · ')] }),
+        ],
+      }))
     }
 
-    // heat with a bar scaled to the lockout threshold
     const heat = Number(p.heat) || 0
-    children.push(Box({
+    card.push(Box({
       flexDirection: 'row',
-      justifyContent: 'space-between',
+      columnGap: 1,
+      marginTop: 1,
       children: [
-        Text({ dimColor: true, children: ['heat'] }),
-        Box({
-          flexDirection: 'row',
-          columnGap: 1,
-          children: [
-            Text({ color: heatColor(heat, lock.threshold), children: [heat + ' ' + heatBar(heat, lock.threshold)] }),
-            lock.locked ? Text({ bold: true, color: 'red', children: ['LOCKED'] }) : Text({ dimColor: true, children: ['/' + (lock.threshold || HEAT_MAX)] }),
-          ],
-        }),
-      ],
+        Text({ dimColor: true, children: ['HEAT'] }),
+        Text({ color: heatColor(heat, lock.threshold), children: [heatBar(heat, lock.threshold)] }),
+        Text({ dimColor: true, children: [heat + '/' + (lock.threshold || HEAT_MAX)] }),
+      ].concat(lock.locked ? [Text({ inverse: true, bold: true, color: 'red', children: [' LOCKED '] })] : []),
+    }))
+
+    if (botnet) {
+      card.push(Box({
+        flexDirection: 'row',
+        columnGap: 1,
+        marginTop: 1,
+        children: [
+          Text({ dimColor: true, children: ['BOTNET'] }),
+          Text({ children: [botnet.total_nodes + ' nodes · ' + Math.round(botnet.aggregate_health || 0) + '%'] }),
+        ],
+      }))
+      const trouble = []
+      if (botnet.critical_count) trouble.push(botnet.critical_count + ' critical')
+      if (botnet.offline_count) trouble.push(botnet.offline_count + ' offline')
+      if (trouble.length) {
+        card.push(Text({ color: 'red', children: ['! ' + trouble.join(' · ')] }))
+      }
+    }
+
+    children.push(Box({
+      borderStyle: 'round',
+      borderDimColor: true,
+      flexDirection: 'column',
+      marginTop: 1,
+      paddingX: 1,
+      children: card,
+    }))
+  } else if (!data.error) {
+    children.push(Box({
+      borderStyle: 'round',
+      borderDimColor: true,
+      marginTop: 1,
+      paddingX: 1,
+      children: [Text({ dimColor: true, children: ['establishing uplink…'] })],
     }))
   }
 
-  // ── botnet ─────────────────────────────────────────────────────────────
-  if (botnet) {
-    children.push(divider(Text, inner))
-    children.push(sectionTitle(Text, 'BOTNET'))
-    children.push(row(el, 'nodes', botnet.total_nodes + ' · health ' + Math.round(botnet.aggregate_health || 0) + '%'))
-    const trouble = []
-    if (botnet.critical_count) trouble.push(botnet.critical_count + ' critical')
-    if (botnet.offline_count) trouble.push(botnet.offline_count + ' offline')
-    if (trouble.length) children.push(row(el, 'status', trouble.join(' · '), { color: 'red' }))
-  }
-
-  // ── active operations ──────────────────────────────────────────────────
+  // ── active operations ───────────────────────────────────────────────────
   const ops = activeOps(state)
   if (ops.length) {
-    children.push(divider(Text, inner))
-    children.push(sectionTitle(Text, 'OPERATIONS'))
+    children.push(sectionHeader(el, 'OPERATIONS', inner))
     for (const op of ops) {
       children.push(Text({ color: 'magenta', children: ['▲ ' + op] }))
     }
   }
 
-  // ── transmissions ──────────────────────────────────────────────────────
+  // ── transmissions ───────────────────────────────────────────────────────
   if (p.username) {
-    children.push(divider(Text, inner))
     const unread = notif.unread_count || 0
-    children.push(sectionTitle(Text, 'TRANSMISSIONS' + (unread ? ' · ' + unread + ' unread' : '')))
+    children.push(sectionHeader(el, 'TRANSMISSIONS', inner, unread ? { text: unread + ' unread', color: 'yellow' } : null))
     const list = notif.notifications || []
     if (!list.length) {
       children.push(Text({ dimColor: true, children: ['the wire is quiet'] }))
     } else {
       for (const n of list.slice(0, 6)) {
-        const unreadMark = n.read_at ? ' ' : '● '
         children.push(Box({
           flexDirection: 'row',
           justifyContent: 'space-between',
+          columnGap: 1,
           children: [
             Text({
               bold: !n.read_at,
+              dimColor: !!n.read_at,
               color: SEV_COLORS[String(n.severity || '').toLowerCase()] || 'gray',
               wrap: 'truncate-end',
-              children: [unreadMark + (n.title || n.type || 'transmission')],
+              children: [(n.read_at ? '  ' : '› ') + (n.title || n.type || 'transmission')],
             }),
             Text({ dimColor: true, children: [timeAgo(n.created_at)] }),
           ],
@@ -144,14 +203,14 @@ export function buildPanel(el, data, width = 44) {
     }
   }
 
-  // ── the wire ───────────────────────────────────────────────────────────
+  // ── the wire ────────────────────────────────────────────────────────────
   if (wireItems.length) {
-    children.push(divider(Text, inner))
-    children.push(sectionTitle(Text, 'THE WIRE'))
+    children.push(sectionHeader(el, 'THE WIRE', inner))
     for (const item of wireItems.slice(0, 4)) {
       children.push(Box({
         flexDirection: 'row',
         justifyContent: 'space-between',
+        columnGap: 1,
         children: [
           Text({ wrap: 'truncate-end', color: item.pinned ? 'cyan' : undefined, children: ['► ' + (item.headline || item.body || '')] }),
           Text({ dimColor: true, children: [timeAgo(item.occurredAt)] }),
@@ -160,20 +219,24 @@ export function buildPanel(el, data, width = 44) {
     }
   }
 
-  // ── footer: freshness, error, controls ─────────────────────────────────
-  children.push(divider(Text, inner))
-  if (data.error) {
-    children.push(Text({ color: 'red', children: [data.error] }))
-  } else if (data.updatedAt) {
-    children.push(Text({ dimColor: true, children: ['updated ' + clock(data.updatedAt)] }))
-  }
+  // ── footer: freshness/error left, controls right ────────────────────────
   children.push(Box({
     flexDirection: 'row',
-    columnGap: 2,
+    justifyContent: 'space-between',
+    marginTop: 1,
     children: [
-      Button({ key: 'hw-panel-refresh', label: 'refresh', hotkey: 'r', plain: true, dimColor: true, onPress: data.onRefresh || noop }),
-      Button({ key: 'hw-panel-read', label: 'read all', hotkey: 'm', plain: true, dimColor: true, onPress: data.onReadAll || noop }),
-      Button({ key: 'hw-panel-close', label: 'close', hotkey: 'x', plain: true, dimColor: true, onPress: data.onClose || noop }),
+      data.error
+        ? Text({ color: 'red', children: [data.error] })
+        : Text({ dimColor: true, children: [data.updatedAt ? 'updated ' + clock(data.updatedAt) : ''] }),
+      Box({
+        flexDirection: 'row',
+        columnGap: 2,
+        children: [
+          Button({ key: 'hw-panel-refresh', label: 'refresh', hotkey: 'r', plain: true, dimColor: true, onPress: data.onRefresh || noop }),
+          Button({ key: 'hw-panel-read', label: 'read all', hotkey: 'm', plain: true, dimColor: true, onPress: data.onReadAll || noop }),
+          Button({ key: 'hw-panel-close', label: 'close', hotkey: 'x', plain: true, dimColor: true, onPress: data.onClose || noop }),
+        ],
+      }),
     ],
   }))
 
@@ -192,23 +255,33 @@ export function activeOps(state) {
   return ops
 }
 
-function sectionTitle(Text, label) {
-  return Text({ bold: true, dimColor: true, children: [label] })
-}
-
-function divider(Text, width) {
-  return Text({ dimColor: true, children: ['─'.repeat(width)] })
-}
-
-function row(el, label, value, valueProps = {}) {
+// A label-over-value cell; flexGrow makes pairs split the card's width.
+function statCell(el, label, value) {
   const { Box, Text } = el
   return Box({
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexGrow: 1,
+    flexDirection: 'column',
     children: [
-      Text({ dimColor: true, children: [label] }),
-      Text({ ...valueProps, children: [String(value)] }),
+      Text({ dimColor: true, children: [label.toUpperCase()] }),
+      Text({ bold: true, color: STAT_COLORS[label], children: [value] }),
     ],
+  })
+}
+
+// ─ TRANSMISSIONS · 3 unread ─────────── with an optional highlighted badge.
+function sectionHeader(el, label, width, badge = null) {
+  const { Box, Text } = el
+  const lead = '─ ' + label
+  const badgeText = badge ? ' · ' + badge.text : ''
+  const tailLen = Math.max(1, width - (lead.length + badgeText.length + 1))
+  return Box({
+    flexDirection: 'row',
+    marginTop: 1,
+    children: [
+      Text({ dimColor: true, bold: true, children: [lead] }),
+      badge ? Text({ bold: true, color: badge.color || 'yellow', children: [badgeText] }) : null,
+      Text({ dimColor: true, children: [' ' + '─'.repeat(tailLen)] }),
+    ].filter(Boolean),
   })
 }
 

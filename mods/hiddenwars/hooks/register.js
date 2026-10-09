@@ -307,6 +307,7 @@ async function tickDeviceFlow($) {
   $.ui.toast('◤ HNDLR ◢ rig linked — uplink established')
   failStreak = 0
   await startPolling($)
+  await launchPanel($)
 }
 
 async function startLogin($, emailArg) {
@@ -396,6 +397,7 @@ async function finishLogin($) {
   $.ui.toast('◤ HNDLR ◢ uplink established')
   failStreak = 0
   await startPolling($)
+  await launchPanel($)
 }
 
 function cancelLogin($) {
@@ -491,7 +493,10 @@ async function announceNew($, list) {
 
 // ---- dashboard panel ----------------------------------------------------------
 
-async function openPanelCommand($) {
+// Open (or re-arm) the dashboard pane: wire the button handlers, start the
+// refresh timer, draw once. Returns whether the pane placed. Shared by
+// /hw panel and the post-login auto-launch.
+async function launchPanel($) {
   if (!panelState) {
     panelState = { timer: null, data: {} }
   }
@@ -516,7 +521,12 @@ async function openPanelCommand($) {
   const sec = pollSeconds(await $.store.get('hw.pollSec')) || DEFAULT_POLL_SEC
   panelState.timer = $.clock.every(sec * 1000, () => { refreshPanel($) })
   refreshPanel($)
-  return opened && opened.isPlaced
+  return !!(opened && opened.isPlaced)
+}
+
+async function openPanelCommand($) {
+  const placed = await launchPanel($)
+  return placed
     ? 'UPLINK panel open — Tab cycles controls, x closes.'
     : 'UPLINK panel waiting — widen the terminal (144+ columns) to see it.'
 }

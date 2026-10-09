@@ -40,6 +40,14 @@ function texts(tree, out = []) {
   for (const c of tree.children || []) texts(c, out)
   return out
 }
+function boxes(tree, out = []) {
+  if (!tree || typeof tree !== 'object') return out
+  if (tree.kind === 'Box') out.push(tree)
+  for (const c of tree.children || []) boxes(c, out)
+  return out
+}
+const allText = (data) => texts(buildPanel(el, data)).map((t) => (t.children || []).join(''))
+const allTextNodes = (data) => texts(buildPanel(el, data))
 
 test('heat helpers scale against the lockout threshold', () => {
   assert.equal(HEAT_MAX, 200)
@@ -53,89 +61,149 @@ test('heat helpers scale against the lockout threshold', () => {
   assert.equal(heatColor(200, 200), 'red')
 })
 
-test('panel renders the operator identity line', () => {
-  const t = texts(buildPanel(el, baseData, 44))
-  const line = t.find((x) => (x.children || []).join('').includes('S4B3R · STEALTH · GHOST'))
-  assert.ok(line, 'identity line present')
+test('title bar: inverse strip with LIVE clock, NO LINK when erroring', () => {
+  const live = allTextNodes(baseData)[0]
+  assert.equal(live.inverse, true)
+  assert.equal(live.bold, true)
+  assert.ok((live.children || [])[0].includes('◤ HNDLR UPLINK'))
+  assert.ok((live.children || [])[0].includes('LIVE'))
+
+  const down = allTextNodes({ ...baseData, error: 'Session expired — /hw login' })[0]
+  assert.equal(down.color, 'red')
+  assert.ok((down.children || [])[0].includes('NO LINK'))
 })
 
-test('heat row colors by ratio and flags lockout', () => {
-  const tree = buildPanel(el, baseData, 44)
-  const heat = texts(tree).find((x) => (x.children || []).join('').startsWith('22 '))
-  assert.ok(heat, 'heat value shown')
-  assert.equal(heat.color, 'green')
-
-  const locked = structuredClone(baseData)
-  locked.state.player.heat = 220
-  locked.state.heat_lockout.locked = true
-  const t2 = texts(buildPanel(el, locked, 44))
-  assert.ok(t2.some((x) => (x.children || []).join('') === 'LOCKED' && x.color === 'red' && x.bold))
+test('identity line: bold operator, dim archetype and tier', () => {
+  const nodes = allTextNodes(baseData)
+  const name = nodes.find((t) => (t.children || [])[0] === 'S4B3R')
+  assert.ok(name, 'username text missing')
+  assert.equal(name.bold, true)
+  const meta = nodes.find((t) => (t.children || [])[0] === 'STEALTH · GHOST')
+  assert.ok(meta, 'identity meta missing')
+  assert.equal(meta.dimColor, true)
 })
 
-test('unread transmissions are bold; read ones are not', () => {
-  const t = texts(buildPanel(el, baseData, 44))
-  const unread = t.find((x) => (x.children || []).join('').includes('● Heat lockout started'))
-  const read = t.find((x) => (x.children || []).join('').includes('Raid repelled'))
-  assert.equal(unread.bold, true)
-  assert.equal(unread.color, 'red') // danger severity color
-  assert.notEqual(read.bold, true)
+test('stat grid: uppercase dim labels over bold colored values', () => {
+  const nodes = allTextNodes(baseData)
+  const cryptoLabel = nodes.find((t) => (t.children || [])[0] === 'CRYPTO')
+  const cryptoValue = nodes.find((t) => (t.children || [])[0] === '12.4M +340')
+  assert.ok(cryptoLabel && cryptoLabel.dimColor, 'CRYPTO label missing')
+  assert.ok(cryptoValue, 'crypto value (with dirty suffix) missing')
+  assert.equal(cryptoValue.bold, true)
+  assert.equal(cryptoValue.color, 'cyan')
+  assert.ok(nodes.some((t) => (t.children || [])[0] === 'FRAGMENTS'))
+  assert.ok(nodes.some((t) => (t.children || [])[0] === 'ECHOES'), 'echoes shown when > 0')
+
+  const noEcho = allTextNodes({ ...baseData, state: { ...baseData.state, player: { ...baseData.state.player, echoes: 0 } } })
+  assert.ok(!noEcho.some((t) => (t.children || [])[0] === 'ECHOES'), 'echoes hidden at 0')
 })
 
-test('botnet trouble line is red when nodes are critical', () => {
-  const t = texts(buildPanel(el, baseData, 44))
-  const trouble = t.find((x) => (x.children || []).join('').includes('3 critical'))
-  assert.ok(trouble)
+test('numbers live in exactly one round-bordered card', () => {
+  const card = boxes(buildPanel(el, baseData)).filter((b) => b.borderStyle === 'round')
+  assert.equal(card.length, 1)
+  assert.equal(card[0].borderDimColor, true)
+  assert.equal(card[0].paddingX, 1)
+})
+
+test('vault row: plain when safe, yellow when exposed or halted', () => {
+  const safe = allTextNodes(baseData).find((t) => (t.children || [])[0] === 'protected 8.1M/10M')
+  assert.ok(safe, 'vault readout missing')
+  assert.notEqual(safe.color, 'yellow')
+
+  const warn = allTextNodes({ ...baseData, state: { ...baseData.state, vault: { cap: 1000, protected: 100, exposed: 400, mining_halted: true } } })
+  const text = warn.find((t) => (t.children || [])[0].includes('MINING HALTED'))
+  assert.ok(text, 'halted marker missing')
+  assert.equal(text.color, 'yellow')
+})
+
+test('heat gauge row: colored bar, ratio, inverse LOCKED badge', () => {
+  const cool = allTextNodes(baseData)
+  const bar = cool.find((t) => /^█+░+$/.test((t.children || [])[0]))
+  assert.ok(bar, 'heat bar missing')
+  assert.equal(bar.color, 'green')
+  assert.ok(cool.some((t) => (t.children || [])[0] === '22/200'), 'ratio missing')
+
+  const locked = allTextNodes({ ...baseData, state: { ...baseData.state, player: { ...baseData.state.player, heat: 200 }, heat_lockout: { threshold: 200, locked: true } } })
+  const badge = locked.find((t) => (t.children || [])[0] === ' LOCKED ')
+  assert.ok(badge, 'LOCKED badge missing')
+  assert.equal(badge.inverse, true)
+  assert.equal(badge.color, 'red')
+  assert.equal(badge.bold, true)
+})
+
+test('botnet rollup inside the card, trouble in red', () => {
+  const nodes = allTextNodes(baseData)
+  assert.ok(nodes.some((t) => (t.children || [])[0] === '48 nodes · 81%'), 'botnet rollup missing')
+  const trouble = nodes.find((t) => (t.children || [])[0].startsWith('! '))
+  assert.ok(trouble, 'trouble line missing')
   assert.equal(trouble.color, 'red')
 })
 
-test('sections disappear when their data is missing', () => {
-  const partial = { state: baseData.state, notif: { unread_count: 0, notifications: [] } }
-  const t = texts(buildPanel(el, partial, 44))
-  assert.ok(!t.some((x) => (x.children || []).join('').startsWith('BOTNET')), 'no botnet section')
-  assert.ok(!t.some((x) => (x.children || []).join('').startsWith('THE WIRE')), 'no wire section')
-  assert.ok(t.some((x) => (x.children || []).join('') === 'the wire is quiet'))
+test('idle panel shows a bordered establishing-uplink card', () => {
+  const lines = allText({})
+  assert.ok(lines.some((l) => l.includes('establishing uplink')), 'empty state missing')
+  assert.ok(lines.some((l) => l.includes('STANDBY')), 'idle bar reads STANDBY')
+  assert.ok(lines.every((l) => !l.includes('LIVE ')), 'no LIVE bar without data')
+  const card = boxes(buildPanel(el, {})).filter((b) => b.borderStyle === 'round')
+  assert.equal(card.length, 1)
 })
 
-test('empty data renders a connecting placeholder, not a crash', () => {
-  const t = texts(buildPanel(el, {}, 44))
-  assert.ok(t.some((x) => (x.children || []).join('').includes('establishing uplink')))
+test('transmissions: unread bold colored with ›, read dim; header badge counts unread', () => {
+  const nodes = allTextNodes(baseData)
+  const unread = nodes.find((t) => (t.children || [])[0] === '› Heat lockout started')
+  assert.ok(unread, 'unread transmission missing')
+  assert.equal(unread.bold, true)
+  assert.equal(unread.color, 'red')
+  const read = nodes.find((t) => (t.children || [])[0] === '  Raid repelled')
+  assert.ok(read, 'read transmission missing')
+  assert.equal(read.dimColor, true)
+  const badge = nodes.find((t) => (t.children || [])[0] === ' · 1 unread')
+  assert.ok(badge, 'unread badge missing')
+  assert.equal(badge.color, 'yellow')
 })
 
-test('wire items show headline + age, pinned in cyan', () => {
-  const t = texts(buildPanel(el, baseData, 44))
-  const pinned = t.find((x) => (x.children || []).join('').includes('NEXUS breach'))
+test('quiet transmissions section says so', () => {
+  const lines = allText({ ...baseData, notif: { unread_count: 0, notifications: [] } })
+  assert.ok(lines.some((l) => l === 'the wire is quiet'))
+})
+
+test('the wire: pinned story in cyan, others plain', () => {
+  const nodes = allTextNodes(baseData)
+  const pinned = nodes.find((t) => (t.children || [])[0].startsWith('► NEXUS'))
+  assert.ok(pinned, 'pinned wire item missing')
   assert.equal(pinned.color, 'cyan')
-  assert.ok(t.some((x) => (x.children || []).join('') === '5m ago'))
+  const plain = nodes.find((t) => (t.children || [])[0].startsWith('► DarkNet'))
+  assert.ok(plain)
+  assert.notEqual(plain.color, 'cyan')
 })
 
-test('error line renders in red and controls are buttons', () => {
-  const data = { ...baseData, error: 'uplink error — retrying next refresh' }
-  const tree = buildPanel(el, data, 44)
-  const t = texts(tree)
-  assert.ok(t.some((x) => x.color === 'red' && (x.children || []).join('').startsWith('uplink error')))
+test('footer: hotkey buttons r/m/x, freshness left, error replaces it', () => {
+  const tree = buildPanel(el, baseData)
   const buttons = []
-  const walk = (n) => {
-    if (n.kind === 'Button') buttons.push(n)
-    for (const c of n.children || []) walk(c)
-  }
-  walk(tree)
-  assert.deepEqual(buttons.map((b) => b.hotkey).sort(), ['m', 'r', 'x'])
-  assert.ok(buttons.every((b) => typeof b.onPress === 'function'))
+  ;(function walk(node) {
+    if (!node || typeof node !== 'object') return
+    if (node.kind === 'Button') buttons.push(node)
+    for (const c of node.children || []) walk(c)
+  })(tree)
+  const hotkeys = buttons.map((b) => b.hotkey)
+  assert.deepEqual(hotkeys.sort(), ['m', 'r', 'x'])
+  assert.ok(allText(baseData).some((l) => l.startsWith('updated ')), 'updated stamp missing')
+
+  const err = allText({ ...baseData, error: 'Session expired — /hw login' })
+  assert.ok(err.includes('Session expired — /hw login'), 'error line missing')
 })
 
-test('activeOps names boss, siege and event defensively', () => {
+test('sections render only with content; ops named defensively', () => {
   assert.deepEqual(activeOps({}), [])
   assert.deepEqual(
-    activeOps({ active_world_boss: { name: 'LEVIATHAN' }, siege_season: {}, active_event: { title: 'Blackout Week' } }),
-    ['WORLD BOSS — LEVIATHAN', 'SIEGE SEASON — DESCENT OPEN', 'EVENT — Blackout Week'],
+    activeOps({ active_world_boss: {}, siege_season: {}, active_event: {} }),
+    ['WORLD BOSS — ACTIVE', 'SIEGE SEASON — DESCENT OPEN', 'EVENT — LIVE'],
   )
-})
-
-test('panel ops section appears only when something is active', () => {
-  const quiet = texts(buildPanel(el, baseData, 44))
-  assert.ok(!quiet.some((x) => (x.children || []).join('').startsWith('OPERATIONS')))
-  const hot = structuredClone(baseData)
-  hot.state.active_world_boss = { name: 'LEVIATHAN' }
-  const t = texts(buildPanel(el, hot, 44))
-  assert.ok(t.some((x) => (x.children || []).join('') === '▲ WORLD BOSS — LEVIATHAN' && x.color === 'magenta'))
+  assert.deepEqual(
+    activeOps({ active_world_boss: { name: 'LEVIATHAN' }, siege_season: { name: 'DESCENT' }, active_event: { title: 'BLACKOUT' } }),
+    ['WORLD BOSS — LEVIATHAN', 'SIEGE SEASON — DESCENT', 'EVENT — BLACKOUT'],
+  )
+  const withOps = { ...baseData, state: { ...baseData.state, active_world_boss: { name: 'LEVIATHAN' } } }
+  assert.ok(allText(withOps).some((l) => l.includes('OPERATIONS')), 'ops header missing')
+  assert.ok(!allText(baseData).some((l) => l.includes('OPERATIONS')), 'ops section should hide without ops')
 })

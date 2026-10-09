@@ -32,7 +32,7 @@ export function createClient({ base, http, getTokens, setTokens }) {
   async function request(path, { method, body, auth = true, retry = true } = {}) {
     const headers = {
       'Content-Type': 'application/json',
-      'User-Agent': 'hiddenwars-uplink/0.3 (claude-code-mod)',
+      'User-Agent': 'hiddenwars-uplink/0.4 (claude-code-mod)',
       'X-Client-Source': 'claude-code-mod',
     }
     if (auth) {
