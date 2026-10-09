@@ -151,7 +151,69 @@ test('requests carry the uplink identity headers', async () => {
     setTokens: async () => {},
   })
   await c2.get('/player')
-  assert.equal(seenHeaders['User-Agent'], 'hiddenwars-uplink/0.2 (claude-code-mod)')
+  assert.equal(seenHeaders['User-Agent'], 'hiddenwars-uplink/0.3 (claude-code-mod)')
   assert.equal(seenHeaders['X-Client-Source'], 'claude-code-mod')
   assert.equal(seenHeaders.Authorization, undefined)
+})
+
+// ---- device pairing (browser login) -------------------------------------------
+
+const deviceStartPayload = {
+  device_code: 'dev-raw',
+  user_code: 'K7QX-M2RP',
+  verification_uri: 'https://hiddenwars.io/#/link',
+  verification_uri_complete: 'https://hiddenwars.io/#/link?code=K7QX-M2RP',
+  expires_in: 600,
+  interval: 5,
+}
+
+test('deviceStart maps the RFC 8628 payload and labels the client', async () => {
+  const f = makeFixture({
+    'POST /auth/device/start': () => ({ status: 200, text: JSON.stringify(deviceStartPayload) }),
+  })
+  const start = await f.client.deviceStart()
+  assert.equal(start.deviceCode, 'dev-raw')
+  assert.equal(start.userCode, 'K7QX-M2RP')
+  assert.equal(start.verificationUriComplete, 'https://hiddenwars.io/#/link?code=K7QX-M2RP')
+  assert.equal(start.intervalMs, 5000)
+  assert.ok(start.expiresAt > Date.now() + 590 * 1000)
+  assert.deepEqual(JSON.parse(f.calls[0].body), { client_label: 'claude-code-mod' })
+})
+
+test('devicePoll maps authorization_pending without throwing', async () => {
+  const f = makeFixture({
+    'POST /auth/device/poll': () => ({ status: 400, text: JSON.stringify({ error: 'authorization_pending' }) }),
+  })
+  const res = await f.client.devicePoll('dev-raw')
+  assert.equal(res.status, 'pending')
+  assert.deepEqual(JSON.parse(f.calls[0].body), { device_code: 'dev-raw' })
+  assert.equal(f.tokens, null)
+})
+
+test('devicePoll maps slow_down and expired_token as flow states', async () => {
+  const f = makeFixture({
+    'POST /auth/device/poll': () => ({ status: 400, text: JSON.stringify({ error: 'slow_down' }) }),
+  })
+  assert.equal((await f.client.devicePoll('dev-raw')).status, 'slowDown')
+
+  const f2 = makeFixture({
+    'POST /auth/device/poll': () => ({ status: 400, text: JSON.stringify({ error: 'expired_token' }) }),
+  })
+  assert.equal((await f2.client.devicePoll('dev-raw')).status, 'expired')
+})
+
+test('devicePoll stores the token pair on success', async () => {
+  const f = makeFixture({
+    'POST /auth/device/poll': () => ({ status: 200, text: JSON.stringify({ token: 'at', refresh_token: 'rt' }) }),
+  })
+  const res = await f.client.devicePoll('dev-raw')
+  assert.equal(res.status, 'ok')
+  assert.deepEqual(f.tokens, { token: 'at', refresh_token: 'rt' })
+})
+
+test('devicePoll rethrows non-flow failures for the caller to retry', async () => {
+  const f = makeFixture({
+    'POST /auth/device/poll': () => ({ status: 500, text: JSON.stringify({ error: 'INTERNAL_ERROR' }) }),
+  })
+  await assert.rejects(f.client.devicePoll('dev-raw'), (err) => err instanceof ApiError && err.status === 500)
 })

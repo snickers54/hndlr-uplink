@@ -38,18 +38,18 @@ Then restart Claude Code (or run `/plugin`) and type `/hw`.
 
 ## Login
 
-Run `/hw login` — a pane opens and asks for your email, password, and auth
-code if you have 2FA enabled. Fields are drawn as typed, so mind your
-surroundings.
+Run `/hw login` — the mod prints a pairing URL and code. Open the link in
+your browser, authorize the terminal from the operator account you're
+already logged into, and the uplink connects itself. No password (and no
+2FA code) is ever typed in the terminal; the browser session vouches for
+you. Pairing codes expire after 10 minutes — `/hw login cancel` aborts
+early.
 
-Prefer not to type the password in the pane? Put it in the environment once:
-
-```
-HIDDENWARS_PASSWORD=… claude
-```
-
-…then run `/hw login you@example.com`. The password is read once, never
-written anywhere, and you'll be reminded to unset it.
+The legacy password path is still there for edge cases: `/hw login pass`
+opens the email/password pane (with a 2FA step when enabled), or set
+`HIDDENWARS_PASSWORD` in the environment once and run
+`/hw login pass you@example.com`. The password is read once, never written
+anywhere, and you'll be reminded to unset it.
 
 ## Privacy & security
 
@@ -62,7 +62,7 @@ written anywhere, and you'll be reminded to unset it.
 - The uplink is **read-only**: it never acts in the game. The only writes are
   the login endpoints and an explicit `/hw read`. It polls at most once per
   30s (`/hw poll` to change, `/hw poll off` to stop).
-- Requests identify themselves as `hiddenwars-uplink/0.1 (claude-code-mod)`.
+- Requests identify themselves as `hiddenwars-uplink/0.3 (claude-code-mod)`.
 
 ## Development
 

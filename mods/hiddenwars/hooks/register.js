@@ -18,6 +18,7 @@ let pollTimer = null
 let failStreak = 0
 let baseCache = DEFAULT_BASE
 let loginFlow = null // { step, email, password, totpSession, error, prefill }
+let deviceFlow = null // { timer, deviceCode, expiresAt, intervalMs }
 let panelState = null // { timer, data: {state, notif, botnet, wire, error, updatedAt} }
 
 export function register(on) {
@@ -25,8 +26,8 @@ export function register(on) {
     const base = await $.store.get('hw.base')
     if (typeof base === 'string' && base) baseCache = base
     for (const spec of [
-      { name: 'hw', description: 'HiddenWars uplink — dashboard panel, operator stats & HNDLR notifications', argumentHint: '[panel|status|notif [n]|read|login [email]|logout|poll <sec|off>|api <url>]' },
-      { name: 'hiddenwars', description: 'HiddenWars uplink (alias of /hw)', argumentHint: '[panel|status|notif [n]|read|login [email]|logout|poll <sec|off>|api <url>]' },
+      { name: 'hw', description: 'HiddenWars uplink — dashboard panel, operator stats & HNDLR notifications', argumentHint: '[panel|status|notif [n]|read|login [pass|cancel]|logout|poll <sec|off>|api <url>]' },
+      { name: 'hiddenwars', description: 'HiddenWars uplink (alias of /hw)', argumentHint: '[panel|status|notif [n]|read|login [pass|cancel]|logout|poll <sec|off>|api <url>]' },
     ]) {
       try {
         await $.command.register(spec)
@@ -103,11 +104,25 @@ async function handleCommand($, raw) {
   const sub = (parts[0] || 'panel').toLowerCase()
   const tokens = await $.store.get('hw.tokens')
 
-  if (sub === 'login') return startLogin($, parts[1])
+  if (sub === 'login') {
+    const mode = (parts[1] || '').toLowerCase()
+    if (mode === 'cancel') {
+      stopDeviceFlow()
+      $.ui.status(undefined)
+      return 'Pairing cancelled.'
+    }
+    if (mode === 'pass' || mode === 'password') return startLogin($, parts[2])
+    return startDeviceLogin($)
+  }
   if (sub === 'logout') {
-    if (!tokens) return 'Already logged out.'
+    if (!tokens) {
+      stopDeviceFlow()
+      $.ui.status(undefined)
+      return 'Already logged out.'
+    }
     stopPolling()
     stopPanelTimer()
+    stopDeviceFlow()
     await $.ui.close({ id: 'hw-panel' })
     $.ui.status(undefined)
     await client($).logout()
@@ -140,7 +155,9 @@ function usage() {
     '  /hw status       operator status as text',
     '  /hw notif [n]    latest n notifications (default 10)',
     '  /hw read         mark all notifications read',
-    '  /hw login [email]  authenticate (password is asked for, never stored)',
+    '  /hw login        link this terminal — opens a browser page to authorize',
+    '  /hw login pass [email]  legacy password prompt (never stored)',
+    '  /hw login cancel abort a running pairing',
     '  /hw logout       sever the uplink',
     '  /hw poll <sec|off>  background poll cadence (min ' + MIN_POLL_SEC + 's, default ' + DEFAULT_POLL_SEC + 's)',
     '  /hw api [url|reset] API base (default ' + DEFAULT_BASE + ')',
@@ -195,9 +212,107 @@ function notifText(notif) {
 
 // ---- login ------------------------------------------------------------------
 
+// Browser pairing (RFC 8628 device flow): no password ever touches the
+// terminal. The player opens the pairing URL, authorizes the code from their
+// logged-in game session, and this poller picks the tokens up.
+async function startDeviceLogin($) {
+  const tokens = await $.store.get('hw.tokens')
+  if (tokens) return 'Already logged in. Run /hw logout first to switch operator.'
+  stopDeviceFlow()
+
+  let start
+  try {
+    start = await client($).deviceStart()
+  } catch (err) {
+    return '◤ Pairing failed to start — ' + ((err && err.message) || 'unknown error') + '. Fallback: /hw login pass'
+  }
+  deviceFlow = {
+    timer: null,
+    deviceCode: start.deviceCode,
+    expiresAt: start.expiresAt,
+    intervalMs: Math.max(2000, start.intervalMs || 5000),
+  }
+  armDeviceTimer($)
+  tickDeviceFlow($)
+
+  const mins = Math.max(1, Math.round((start.expiresAt - Date.now()) / 60000))
+  return [
+    '◤ HNDLR UPLINK — RIG PAIRING',
+    '',
+    '  1. open  ' + start.verificationUriComplete,
+    '     (or visit ' + start.verificationUri + ' and enter the code)',
+    '  2. authorize this terminal from your operator account',
+    '  3. the uplink connects itself once approved',
+    '',
+    '  code     ' + start.userCode,
+    '  expires  in ' + mins + ' min · /hw login cancel aborts',
+    '',
+    '  No password is typed here — your browser session vouches for you.',
+    '  Legacy password prompt: /hw login pass',
+  ].join('\n')
+}
+
+function armDeviceTimer($) {
+  if (!deviceFlow) return
+  if (deviceFlow.timer) {
+    if (typeof deviceFlow.timer === 'function') deviceFlow.timer()
+    else if (deviceFlow.timer.cancel) deviceFlow.timer.cancel()
+  }
+  deviceFlow.timer = $.clock.every(deviceFlow.intervalMs, () => { tickDeviceFlow($) })
+}
+
+function stopDeviceFlow() {
+  if (deviceFlow && deviceFlow.timer) {
+    if (typeof deviceFlow.timer === 'function') deviceFlow.timer()
+    else if (deviceFlow.timer.cancel) deviceFlow.timer.cancel()
+  }
+  deviceFlow = null
+}
+
+async function tickDeviceFlow($) {
+  if (!deviceFlow) return
+  if (Date.now() >= deviceFlow.expiresAt) {
+    stopDeviceFlow()
+    $.ui.status(undefined)
+    $.ui.toast('◤ HNDLR ◢ pairing expired — run /hw login')
+    return
+  }
+
+  let res
+  try {
+    res = await client($).devicePoll(deviceFlow.deviceCode)
+  } catch {
+    return // transient network failure — the next tick retries
+  }
+
+  if (res.status === 'pending') {
+    const left = Math.max(0, Math.round((deviceFlow.expiresAt - Date.now()) / 1000))
+    const clock = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0')
+    $.ui.status('◤HW pairing — approve the code in your browser (' + clock + ' left)')
+    return
+  }
+  if (res.status === 'slowDown') {
+    deviceFlow.intervalMs = Math.min(15000, deviceFlow.intervalMs * 2)
+    armDeviceTimer($)
+    return
+  }
+  if (res.status === 'expired') {
+    stopDeviceFlow()
+    $.ui.status(undefined)
+    $.ui.toast('◤ HNDLR ◢ pairing expired — run /hw login')
+    return
+  }
+  // Linked: tokens are already persisted by devicePoll().
+  stopDeviceFlow()
+  $.ui.toast('◤ HNDLR ◢ rig linked — uplink established')
+  failStreak = 0
+  await startPolling($)
+}
+
 async function startLogin($, emailArg) {
   const tokens = await $.store.get('hw.tokens')
   if (tokens) return 'Already logged in. Run /hw logout first to switch operator.'
+  stopDeviceFlow()
 
   // Headless path: /hw login email with HIDDENWARS_PASSWORD set in the env —
   // for players who don't want to type the password in a pane.

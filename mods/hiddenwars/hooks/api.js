@@ -10,6 +10,8 @@
 //   POST /auth/totp/login     {totp_session, code} -> {token, refresh_token}
 //   POST /auth/refresh        {refresh_token} -> {token, refresh_token}
 //                             (refresh token rotates on every call)
+//   POST /auth/device/start   -> pairing URL + codes (browser login flow)
+//   POST /auth/device/poll    {device_code} -> pending | tokens
 // Access tokens live 1h; refresh tokens 30d. The client retries once on a
 // 401 by refreshing first.
 
@@ -30,7 +32,7 @@ export function createClient({ base, http, getTokens, setTokens }) {
   async function request(path, { method, body, auth = true, retry = true } = {}) {
     const headers = {
       'Content-Type': 'application/json',
-      'User-Agent': 'hiddenwars-uplink/0.2 (claude-code-mod)',
+      'User-Agent': 'hiddenwars-uplink/0.3 (claude-code-mod)',
       'X-Client-Source': 'claude-code-mod',
     }
     if (auth) {
@@ -119,6 +121,48 @@ export function createClient({ base, http, getTokens, setTokens }) {
         // regardless.
       }
       await setTokens(null)
+    },
+
+    // Device pairing (RFC 8628 subset): the browser-login path behind
+    // /hw login. start() mints a grant and returns everything the terminal
+    // needs to print the pairing URL; poll() is called on a clock until the
+    // player approves the code at the verification page.
+    async deviceStart() {
+      const json = await request('/auth/device/start', {
+        method: 'POST',
+        body: { client_label: 'claude-code-mod' },
+        auth: false,
+      })
+      return {
+        deviceCode: json.device_code,
+        userCode: json.user_code,
+        verificationUri: json.verification_uri,
+        verificationUriComplete: json.verification_uri_complete,
+        expiresAt: Date.now() + (json.expires_in || 600) * 1000,
+        intervalMs: (json.interval || 5) * 1000,
+      }
+    },
+
+    // poll() never throws for flow states: pending / slowDown / expired are
+    // returned as {status}. Only real failures (network, server 5xx) throw,
+    // which the caller treats as transient and retries on the next tick.
+    async devicePoll(deviceCode) {
+      try {
+        const json = await request('/auth/device/poll', {
+          method: 'POST',
+          body: { device_code: deviceCode },
+          auth: false,
+        })
+        await setTokens({ token: json.token, refresh_token: json.refresh_token })
+        return { status: 'ok' }
+      } catch (err) {
+        if (err instanceof ApiError) {
+          if (err.code === 'authorization_pending') return { status: 'pending' }
+          if (err.code === 'slow_down') return { status: 'slowDown' }
+          if (err.code === 'expired_token') return { status: 'expired' }
+        }
+        throw err
+      }
     },
 
     get(path) {
