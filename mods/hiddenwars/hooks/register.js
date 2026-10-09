@@ -6,6 +6,7 @@
 // auth endpoints and an explicit `/hw read`).
 
 import { createClient, DEFAULT_BASE } from './api.js'
+import { buildPanel } from './panel.js'
 import { compact, timeAgo, severityMark, row } from './format.js'
 
 const DEFAULT_POLL_SEC = 60
@@ -17,14 +18,15 @@ let pollTimer = null
 let failStreak = 0
 let baseCache = DEFAULT_BASE
 let loginFlow = null // { step, email, password, totpSession, error, prefill }
+let panelState = null // { timer, data: {state, notif, botnet, wire, error, updatedAt} }
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
     const base = await $.store.get('hw.base')
     if (typeof base === 'string' && base) baseCache = base
     for (const spec of [
-      { name: 'hw', description: 'HiddenWars uplink — operator stats & HNDLR notifications', argumentHint: '[status|notif [n]|read|login [email]|logout|poll <sec|off>|api <url>]' },
-      { name: 'hiddenwars', description: 'HiddenWars uplink (alias of /hw)', argumentHint: '[status|notif [n]|read|login [email]|logout|poll <sec|off>|api <url>]' },
+      { name: 'hw', description: 'HiddenWars uplink — dashboard panel, operator stats & HNDLR notifications', argumentHint: '[panel|status|notif [n]|read|login [email]|logout|poll <sec|off>|api <url>]' },
+      { name: 'hiddenwars', description: 'HiddenWars uplink (alias of /hw)', argumentHint: '[panel|status|notif [n]|read|login [email]|logout|poll <sec|off>|api <url>]' },
     ]) {
       try {
         await $.command.register(spec)
@@ -42,6 +44,10 @@ export function register(on) {
     respond($, e).catch((err) => ({ text: '◤ HW uplink error — ' + ((err && err.message) || String(err)) })))
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId === 'hw-panel' && panelState) {
+      const el = $.ui.resolve(e)
+      return buildPanel(el, panelState.data, (e.props && e.props.bodyColumns) || 44)
+    }
     if (e.requestId !== 'hw-login' || !loginFlow) return next(e)
     const { Box, Text, Input, Button } = $.ui.resolve(e)
     const lines = []
@@ -79,6 +85,13 @@ export function register(on) {
     lines.push(Button({ key: 'hw-cancel', label: 'cancel', onPress: () => cancelLogin($) }))
     return Box({ flexDirection: 'column', children: lines })
   })
+
+  // A closed pane must stop its refresh timer; answering without next would
+  // keep the pane open, so pass everything on.
+  on('ui.close', { id: 'hw-panel' }, ($, e, next) => {
+    stopPanelTimer()
+    return next(e)
+  })
 }
 
 async function respond($, e) {
@@ -87,13 +100,15 @@ async function respond($, e) {
 
 async function handleCommand($, raw) {
   const parts = raw.trim().split(/\s+/).filter(Boolean)
-  const sub = (parts[0] || 'status').toLowerCase()
+  const sub = (parts[0] || 'panel').toLowerCase()
   const tokens = await $.store.get('hw.tokens')
 
   if (sub === 'login') return startLogin($, parts[1])
   if (sub === 'logout') {
     if (!tokens) return 'Already logged out.'
     stopPolling()
+    stopPanelTimer()
+    await $.ui.close({ id: 'hw-panel' })
     $.ui.status(undefined)
     await client($).logout()
     return '◤ HNDLR ◢ uplink severed. Run /hw login to reconnect.'
@@ -113,6 +128,7 @@ async function handleCommand($, raw) {
     const n = Math.min(50, Math.max(1, parseInt(parts[1], 10) || 10))
     return notifText(await client($).get('/player/notifications?limit=' + n))
   }
+  if (sub === 'panel') return openPanelCommand($)
   if (sub === 'status') return statusText($)
   return usage()
 }
@@ -120,7 +136,8 @@ async function handleCommand($, raw) {
 function usage() {
   return [
     '◤ HNDLR UPLINK — commands',
-    '  /hw              operator status (resources, heat, botnet, unread)',
+    '  /hw              open the dashboard panel (resources, heat, botnet, wire)',
+    '  /hw status       operator status as text',
     '  /hw notif [n]    latest n notifications (default 10)',
     '  /hw read         mark all notifications read',
     '  /hw login [email]  authenticate (password is asked for, never stored)',
@@ -355,6 +372,81 @@ async function announceNew($, list) {
     }
   }
   await $.store.set('hw.seen', Array.from(seen).slice(-SEEN_CAP))
+}
+
+// ---- dashboard panel ----------------------------------------------------------
+
+async function openPanelCommand($) {
+  if (!panelState) {
+    panelState = { timer: null, data: {} }
+  }
+  // Button handlers: closures over $ so the pure builders in panel.js stay
+  // free of the mods API.
+  panelState.data.onRefresh = () => { refreshPanel($) }
+  panelState.data.onReadAll = async () => {
+    try {
+      await client($).markAllRead()
+      await refreshPanel($)
+    } catch (err) {
+      if (panelState) {
+        panelState.data.error = (err && err.message) || 'read-all failed'
+        $.ui.invalidate('ui.render')
+      }
+    }
+  }
+  panelState.data.onClose = () => { $.ui.close({ id: 'hw-panel' }) }
+
+  const opened = await $.ui.open({ id: 'hw-panel', title: 'HW UPLINK', focus: true, closeOnEscape: true, columns: 44 })
+  stopPanelTimer()
+  const sec = pollSeconds(await $.store.get('hw.pollSec')) || DEFAULT_POLL_SEC
+  panelState.timer = $.clock.every(sec * 1000, () => { refreshPanel($) })
+  refreshPanel($)
+  return opened && opened.isPlaced
+    ? 'UPLINK panel open — Tab cycles controls, x closes.'
+    : 'UPLINK panel waiting — widen the terminal (144+ columns) to see it.'
+}
+
+function stopPanelTimer() {
+  if (panelState && panelState.timer) {
+    if (typeof panelState.timer === 'function') panelState.timer()
+    else if (panelState.timer.cancel) panelState.timer.cancel()
+    panelState.timer = null
+  }
+}
+
+// One pass over the four read endpoints; each failure degrades its own
+// section and keeps the last good data. A dead session stops the panel
+// timer the same way the background poller stops itself.
+async function refreshPanel($) {
+  if (!panelState) return
+  const c = client($)
+  let sessionDead = false
+  const soft = (err) => {
+    if (err && err.code === 'SESSION_EXPIRED') sessionDead = true
+    return null
+  }
+  const [state, notif, wire, botnet] = await Promise.all([
+    c.get('/player/state').catch(soft),
+    c.get('/player/notifications?limit=6').catch(soft),
+    c.get('/wire/latest').catch(soft),
+    c.get('/botnet/summary').catch(soft),
+  ])
+  if (sessionDead) {
+    stopPanelTimer()
+    stopPolling()
+    panelState.data.error = 'Session expired — /hw login'
+    panelState.data.updatedAt = Date.now()
+    $.ui.status('◤HW uplink expired — run /hw login')
+    $.ui.invalidate('ui.render')
+    return
+  }
+  if (state) panelState.data.state = state
+  if (notif) panelState.data.notif = notif
+  if (wire) panelState.data.wire = wire
+  if (botnet) panelState.data.botnet = botnet
+  panelState.data.error = state || notif ? '' : 'uplink error — retrying next refresh'
+  panelState.data.updatedAt = Date.now()
+  $.ui.invalidate('ui.render')
 }
 
 // ---- config -------------------------------------------------------------------

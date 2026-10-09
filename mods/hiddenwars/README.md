@@ -9,8 +9,13 @@ watch the wire for incoming heat lockouts and raids — without opening the game
 
 ## What it does
 
-- **`/hw`** — operator status: crypto (clean + dirty), fragments, echoes,
-  reputation, heat, clearance tier, botnet rollup, unread count.
+- **`/hw`** — opens the **dashboard panel** (a right sidebar in wide
+  terminals, 144+ columns): resources, a heat bar with lockout threshold,
+  vault protection, botnet rollup, active operations (world boss, siege,
+  events), recent transmissions, and the latest Wire headlines — with
+  `r` refresh / `m` read-all / `x` close controls. It auto-refreshes on the
+  poll cadence.
+- **`/hw status`** — the same operator readout as text.
 - **`/hw notif [n]`** — latest transmissions, severity-marked, newest first.
 - **`/hw read`** — clear the unread badge.
 - **Status line** — once logged in, a quiet `◤HW <operator> · crypto 1.2M ·
@@ -25,7 +30,7 @@ watch the wire for incoming heat lockouts and raids — without opening the game
 Requires Claude Code **v2.1.287+**.
 
 ```
-claude plugin marketplace add snickers54/shadownet
+claude plugin marketplace add snickers54/hndlr-uplink
 claude plugin install hiddenwars@shadownet
 ```
 
