@@ -1,0 +1,12 @@
+{
+  "name": "shadownet",
+  "description": "HiddenWars — browser-based hacking strategy game",
+  "owner": { "name": "HiddenWars", "url": "https://hiddenwars.io" },
+  "plugins": [
+    {
+      "name": "hiddenwars",
+      "source": "./mods/hiddenwars",
+      "description": "HNDLR uplink: monitor your HiddenWars operator stats and notifications from Claude Code"
+    }
+  ]
+}

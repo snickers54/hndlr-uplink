@@ -1,0 +1,4 @@
+{
+  "description": "HiddenWars HNDLR uplink hooks module",
+  "modules": ["./register.js"]
+}
